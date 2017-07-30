@@ -1,7 +1,6 @@
 # Number guessing game Amazon Alexa skill developed by Austin Patel
 
 # Imports
-from random import randint
 from math import copysign, sqrt
 
 # Variables
@@ -11,23 +10,24 @@ NUMBER_LIST_KEY, LAST_QUESTION_KEY, LAST_NUMBER_KEY, NUM_QUESTIONS_KEY = 'number
                                                                          'last number', 'num questions'
 
 START_SPEECH = 'Think of a number between 1 and 100, inclusive.  Now I am going to attempt to guess your number.'
-HELP_SPEECH = 'Once you have though of a number between 1 and 100, I am going to ask you some questions' \
+HELP_SPEECH = 'Once you have thought of a number between 1 and 100, I am going to ask you some questions ' \
               'and figure out what number you thought of.'
 FOUND_NUMBER_SPEECH = 'I have determined that your number is '
 UNEXPECTED_ANSWER_SPEECH = 'I was not expecting you to say that right now.'
 WELCOME_SPEECH = 'Welcome to the number game.  Think of a number between 1 and 100, and I am going to figure' \
-                  'out what number you are thinking of, by asking you a few questions. Let\'s begin... '
+                 'out what number you are thinking of, by asking you a few questions. Let\'s begin... '
 
-LESS_THAN_QUESTION, GREATER_THAN_QUESTION,  = 'Is your number less than ', 'Is your number greater than '
+LESS_THAN_QUESTION, GREATER_THAN_QUESTION,  = 'Is your number less than', 'Is your number greater than'
 PRIME_QUESTION, NO_QUESTION = 'Is your number prime', ''
+PLAY_NOW_QUESTION = 'Would you like to play the game now'
 
 session_attributes = {}
 
 
 # Initialization
-def on_session_start(event):
+def on_session_start():
     """ Initializes session attributes when the session is started """
-    session_attributes[NUMBER_LIST_KEY] = [LOWER + i for i in range(UPPER)]
+    session_attributes[NUMBER_LIST_KEY] = [LOWER + i for i in range(UPPER - LOWER + 1)]
     session_attributes[LAST_QUESTION_KEY] = NO_QUESTION
     session_attributes[LAST_NUMBER_KEY] = -1
     session_attributes[NUM_QUESTIONS_KEY] = 0
@@ -69,17 +69,17 @@ def question(question_base, extension='', intro=''):
     session_attributes[LAST_NUMBER_KEY] = extension
     session_attributes[NUM_QUESTIONS_KEY] += 1
 
-    question_text = question_base + str(extension) + '?'
+    if extension != '':
+        extension = ' ' + str(extension)
 
-    return say(output=intro + question_text, reprompt_text=question_text, should_end_session=False)
+    question_text = question_base + extension + '?'
+
+    return say(output=intro + ' ' + question_text, reprompt_text=question_text, should_end_session=False)
 
 
 def welcome():
     """ Welcomes the user with a message and randomly picks a question to ask the user about their number """
-    # if randint(0, 1) == 0:
-    #     return question(LESS_THAN_QUESTION, get_middle(), intro=WELCOME_SPEECH)
-    # else:
-    #     return question(GREATER_THAN_QUESTION, get_middle(), intro=WELCOME_SPEECH)
+    on_session_start()
     return question(PRIME_QUESTION, intro=WELCOME_SPEECH)
 
 
@@ -121,14 +121,16 @@ def question_answer(is_yes):
     last_question = session_attributes[LAST_QUESTION_KEY]
     last_number = session_attributes[LAST_NUMBER_KEY]
 
-    if last_question == NO_QUESTION:
+    if last_question == PLAY_NOW_QUESTION:
+        if is_yes:
+            on_session_start()
+            return question(PRIME_QUESTION)
+        else:
+            return end()
+    elif last_question == NO_QUESTION:
         return say(UNEXPECTED_ANSWER_SPEECH)
-    elif last_question == PRIME_QUESTION:
-        keep_in_numbers(lambda n: is_prime(n), keep=is_yes)
-    elif last_question == GREATER_THAN_QUESTION:
-        keep_in_numbers(lambda n: n > last_number, keep=is_yes)
-    elif last_question == LESS_THAN_QUESTION:
-        keep_in_numbers(lambda n: n < last_number, keep=is_yes)
+    else:
+        keep_in_numbers(get_filter(last_question, last_number), keep=is_yes)
 
     num_list = session_attributes[NUMBER_LIST_KEY]
 
@@ -144,6 +146,15 @@ def question_answer(is_yes):
         return question(LESS_THAN_QUESTION, get_middle())
     else:
         return question(GREATER_THAN_QUESTION, get_middle())
+
+
+def get_filter(last_question, last_number):
+    if last_question == PRIME_QUESTION:
+        return lambda n: is_prime(n)
+    elif last_question == GREATER_THAN_QUESTION:
+        return lambda n: n > last_number
+    elif last_question == LESS_THAN_QUESTION:
+        return lambda n: n < last_number
 
 
 def keep_in_numbers(predicate, keep=True):
@@ -178,12 +189,12 @@ def lambda_handler(event, context):
     session_attributes = event['session']['attributes']
 
     if event['session']['new']:
-        on_session_start(event)
+        on_session_start()
 
     return request_to_handler[event['request']['type']](event)
 
 
-name_to_handler = {'AMAZON.HelpIntent': lambda: say(HELP_SPEECH),
+name_to_handler = {'AMAZON.HelpIntent': lambda: question(PLAY_NOW_QUESTION, intro=HELP_SPEECH),
                    'AMAZON.CancelIntent': end,
                    'AMAZON.StopIntent': end,
                    'Yes': lambda: question_answer(True),
