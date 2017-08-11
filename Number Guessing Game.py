@@ -6,20 +6,32 @@ from math import copysign, sqrt
 # Variables
 LOWER, UPPER = 1, 100
 
-NUMBER_LIST_KEY, LAST_QUESTION_KEY, LAST_NUMBER_KEY, NUM_QUESTIONS_KEY = 'number list', 'last question', \
-                                                                         'last number', 'num questions'
+NUMBER_LIST_KEY, LAST_QUESTION_KEY, LAST_EXTENSION_KEY, NUM_QUESTIONS_KEY = 'number list', 'last question', \
+                                                                         'last extension', 'num questions'
 
-START_SPEECH = 'Think of a number between 1 and 100, inclusive.  Now I am going to attempt to guess your number.'
-HELP_SPEECH = 'Once you have thought of a number between 1 and 100, I am going to ask you some questions ' \
-              'and figure out what number you thought of.'
 FOUND_NUMBER_SPEECH = 'I have determined that your number is '
 UNEXPECTED_ANSWER_SPEECH = 'I was not expecting you to say that right now.'
-WELCOME_SPEECH = 'Welcome to the number game.  Think of a number between 1 and 100, and I am going to figure' \
-                 'out what number you are thinking of, by asking you a few questions. Let\'s begin... '
+WELCOME_SPEECH = 'Think of a number between 1 and 100, and I am going to figure it out. \
+                 Answer each question with yes, or no.  Then, I am going to \
+                 say numbers which you respond with lower, higher, or correct, based on your number. Let\'s begin... '
 
-LESS_THAN_QUESTION, GREATER_THAN_QUESTION,  = 'Is your number less than', 'Is your number greater than'
-PRIME_QUESTION, NO_QUESTION = 'Is your number prime', ''
-PLAY_NOW_QUESTION = 'Would you like to play the game now'
+PRIME_QUESTION, NO_QUESTION = 'Is your number prime', 'No question, this should not be spoken.'
+PRIME_QUESTION_HELP = 'A number is prime if it is greater than 1 and does not divide evenly with any number besides 1 and itself.  \
+                      Answer this question with yes, or no.'
+NUMBER_GUESS_QUESTION = ''
+NUMBER_GUESS_QUESTION_HELP = 'I am going to say numbers and you respond with lower, higher, or correct \
+                             based on the number you thought of.'
+
+HELP_MESSAGES = {PRIME_QUESTION: PRIME_QUESTION_HELP,
+                 NUMBER_GUESS_QUESTION: NUMBER_GUESS_QUESTION_HELP}
+
+REPEAT_QUESTIONS = list(HELP_MESSAGES.values()) + [UNEXPECTED_ANSWER_SPEECH]
+
+HIGHER_INTENT, LOWER_INTENT, NO_INTENT, YES_INTENT, START_INTENT = 'Higher', 'Lower', 'No', 'Yes', 'Start'
+HELP_INTENT, CANCEL_INTENT, STOP_INTENT = 'AMAZON.HelpIntent', 'AMAZON.CancelIntent', 'AMAZON.StopIntent'
+
+LAUNCH_REQUEST, INTENT_REQUEST, SESSION_ENDED_REQUEST = 'LaunchRequest', 'IntentRequest', 'SessionEndedRequest'
+
 
 session_attributes = {}
 
@@ -29,7 +41,7 @@ def on_session_start():
     """ Initializes session attributes when the session is started """
     session_attributes[NUMBER_LIST_KEY] = [LOWER + i for i in range(UPPER - LOWER + 1)]
     session_attributes[LAST_QUESTION_KEY] = NO_QUESTION
-    session_attributes[LAST_NUMBER_KEY] = -1
+    session_attributes[LAST_EXTENSION_KEY] = ''
     session_attributes[NUM_QUESTIONS_KEY] = 0
 
 
@@ -66,8 +78,10 @@ def say(output='', reprompt_text='', title='', should_end_session=True):
 def question(question_base, extension='', intro=''):
     """ Asks a question and prepares the users response """
     session_attributes[LAST_QUESTION_KEY] = question_base
-    session_attributes[LAST_NUMBER_KEY] = extension
-    session_attributes[NUM_QUESTIONS_KEY] += 1
+    session_attributes[LAST_EXTENSION_KEY] = extension
+    # don't add to counter for repeat questions
+    if intro not in REPEAT_QUESTIONS:
+        session_attributes[NUM_QUESTIONS_KEY] += 1
 
     if extension != '':
         extension = ' ' + str(extension)
@@ -83,9 +97,25 @@ def welcome():
     return question(PRIME_QUESTION, intro=WELCOME_SPEECH)
 
 
+def help():
+    """ Helps the user based on where they currently are in the program """
+    last_question = session_attributes[LAST_QUESTION_KEY]
+    last_extension = session_attributes[LAST_EXTENSION_KEY]
+
+    if last_question == NO_QUESTION:
+        return welcome()
+    else:
+        return question(last_question, extension=last_extension, intro=HELP_MESSAGES[last_question])
+
+
 def end():
     """ Terminates the current session """
     return say()
+
+
+def unexpected_response():
+    """Returns the unexpected response speech."""
+    return say(UNEXPECTED_ANSWER_SPEECH)
 
 
 # Helper
@@ -114,24 +144,23 @@ def is_prime(n):
 
 
 # Game logic
-def question_answer(is_yes):
+def question_answer(response):
     """ Handles the users response to a given question and the scenario in which this
     intent is called even though there was no question given
+
+    Parameters:
+        response: a string that is the name of an intent
     """
+    # handle answers to previous questions
     last_question = session_attributes[LAST_QUESTION_KEY]
-    last_number = session_attributes[LAST_NUMBER_KEY]
+    last_extension = session_attributes[LAST_EXTENSION_KEY]
 
-    if last_question == PLAY_NOW_QUESTION:
-        if is_yes:
-            on_session_start()
-            return question(PRIME_QUESTION)
-        else:
-            return end()
-    elif last_question == NO_QUESTION:
-        return say(UNEXPECTED_ANSWER_SPEECH)
-    else:
-        keep_in_numbers(get_filter(last_question, last_number), keep=is_yes)
+    try:
+        keep_in_numbers(get_filter(last_question, last_extension, response))
+    except Exception:
+        return question(last_question, last_extension, intro=UNEXPECTED_ANSWER_SPEECH)
 
+    # check to see if the number was determined
     num_list = session_attributes[NUMBER_LIST_KEY]
 
     if len(num_list) == 1:
@@ -139,41 +168,41 @@ def question_answer(is_yes):
                  str(session_attributes[NUM_QUESTIONS_KEY]) + ' questions to figure it out.'
         return say(speech, should_end_session=True)
 
-    # Alternate between the less than or greater than questions, and don't pick the less than question if there
-    # are only two items in the number list because middle will return the lower of those values and it doesn't
-    # make sense to ask if the number is less than the lowest possible value left since it cannot be
-    if last_question == GREATER_THAN_QUESTION and len(num_list) > 2:
-        return question(LESS_THAN_QUESTION, get_middle())
-    else:
-        return question(GREATER_THAN_QUESTION, get_middle())
+    # ask the next question
+    return question(NUMBER_GUESS_QUESTION, extension=get_middle())
 
 
-def get_filter(last_question, last_number):
+def get_filter(last_question, last_extension, response):
     if last_question == PRIME_QUESTION:
-        return lambda n: is_prime(n)
-    elif last_question == GREATER_THAN_QUESTION:
-        return lambda n: n > last_number
-    elif last_question == LESS_THAN_QUESTION:
-        return lambda n: n < last_number
+        if response == YES_INTENT:
+            return lambda n: is_prime(n)
+        elif response == NO_INTENT:
+            return lambda n: not is_prime(n)
+    elif last_question == NUMBER_GUESS_QUESTION:
+        if response == HIGHER_INTENT:
+            return lambda n: n > last_extension
+        elif response == LOWER_INTENT:
+            return lambda n: n < last_extension
+        elif response == YES_INTENT:
+            return lambda n: n == last_extension
+
+    raise Exception
 
 
-def keep_in_numbers(predicate, keep=True):
+def keep_in_numbers(predicate):
     """ Keeps or remove each number in the number list that returns a true value for a given predicate function.
     Defaults to keeping the number
     """
-    session_attributes[NUMBER_LIST_KEY] = [n for n in session_attributes[NUMBER_LIST_KEY]
-                                           if (predicate(n) if keep else not predicate(n))]
+    session_attributes[NUMBER_LIST_KEY] = [n for n in session_attributes[NUMBER_LIST_KEY] if predicate(n)]
 
 
 # Event handlers and related variables
-def handle_intent(intent_request, session):
+def handle_intent(intent_name):
     """ Called when the user specifies an intent for this skill """
-    intent_name = intent_request['intent']['name']
-
     if intent_name in name_to_handler:
         return name_to_handler[intent_name]()
     else:
-        raise ValueError('Invalid intent')
+        return question_answer(intent_name)
 
 
 def lambda_handler(event, context):
@@ -194,13 +223,11 @@ def lambda_handler(event, context):
     return request_to_handler[event['request']['type']](event)
 
 
-name_to_handler = {'AMAZON.HelpIntent': lambda: question(PLAY_NOW_QUESTION, intro=HELP_SPEECH),
-                   'AMAZON.CancelIntent': end,
-                   'AMAZON.StopIntent': end,
-                   'Yes': lambda: question_answer(True),
-                   'No': lambda: question_answer(False),
-                   'Start': welcome}
+name_to_handler = {HELP_INTENT: help,
+                   CANCEL_INTENT: end,
+                   STOP_INTENT: end,
+                   START_INTENT: welcome}
 
-request_to_handler = {'LaunchRequest': lambda event: welcome(),
-                      'IntentRequest': lambda event: handle_intent(event['request'], event['session']),
-                      'SessionEndedRequest': lambda event: end()}
+request_to_handler = {LAUNCH_REQUEST: lambda event: welcome(),
+                      INTENT_REQUEST: lambda event: handle_intent(event['request']['intent']['name']),
+                      SESSION_ENDED_REQUEST: lambda event: end()}
